@@ -2,42 +2,51 @@ import korolev.*
 import korolev.server.*
 import korolev.state.javaSerialization.*
 import korolev.effect.*
-
 import levsha.dsl.*
 import levsha.dsl.html.*
 
+import java.net.InetSocketAddress
 import scala.concurrent.Future
+
+case class Message(author: String, text: String)
 
 case class State(
     title: String = "Hello Scala",
-    items: Vector[String] = Vector.empty
+    messages: Vector[Message] = Vector.empty
 )
 
-object HolyScala extends KorolevApp[Future, Array[Byte], State, Any] {
+object HolyScala
+    extends KorolevApp[Future, Array[Byte], State, Any](
+      address = new InetSocketAddress("0.0.0.0", 8080)
+    ) {
 
   import context.*
 
-  private val itemsQueue = Queue[Future, String]()
-  private val itemsHub = Hub(itemsQueue.stream)
+  private val messagesQueue = Queue[Future, Message]()
+  private val messagesHub = Hub(messagesQueue.stream)
 
-  private val newItemInput = elementId(Some("newItemInput"))
+  private val authorInput = elementId(Some("authorInput"))
+  private val messageTextInput = elementId(Some("messageTextInput"))
 
   def onSubmit(access: Access): Future[Unit] =
     for {
-      newItem <- access.valueOf(newItemInput)
-      _ <- access.transition(state =>
-        state.copy(items = state.items :+ newItem)
-      )
+      author <- access.valueOf(authorInput)
+      text <- access.valueOf(messageTextInput)
+      _ <- messagesQueue.offer(Message(author, text))
     } yield ()
 
   def render(state: State): Node = optimize {
     Html(
       body(
-        div(clazz := "title", state.title),
-        ul(clazz := "list", state.items.map(item => li(clazz := "item", item))),
+        div(
+          state.messages.map(message =>
+            div(s"${message.author}: ${message.text}")
+          )
+        ),
         form(
-          input(newItemInput),
-          button("Add"),
+          input(authorInput),
+          input(messageTextInput),
+          button("Send"),
           event("submit")(onSubmit)
         )
       )
@@ -46,9 +55,11 @@ object HolyScala extends KorolevApp[Future, Array[Byte], State, Any] {
 
   private val itemsQueueExtension = Extension[Future, State, Any] { access =>
     for {
-      stream <- itemsHub.newStream()
-      _ <- stream.foreach { item =>
-        access.transition(identity)
+      stream <- messagesHub.newStream()
+      _ <- stream.foreach { message =>
+        access.transition(state =>
+          state.copy(messages = state.messages :+ message)
+        )
       }
     } yield Extension.Handlers()
   }
@@ -57,7 +68,8 @@ object HolyScala extends KorolevApp[Future, Array[Byte], State, Any] {
     KorolevServiceConfig(
       stateLoader = StateLoader.default(State()),
       document = render,
-      extensions = List(itemsQueueExtension)
+      extensions = List(itemsQueueExtension),
+      rootPath = "/holyjs-2022-06/" // REMOVE THIS IF YOU RUN APP ON LOCALHOST
     )
   }
 }
